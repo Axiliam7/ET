@@ -25,8 +25,8 @@ export function AssessmentPage() {
         title="Questions"
         submitLabel="Submit unit check"
         questions={unitAssessment.questions}
-        onSubmit={({ overallPercent, byConcept }) => {
-          submitUnitAssessment(byConcept, overallPercent);
+        onSubmit={(payload) => {
+          submitUnitAssessment(payload);
         }}
       />
 

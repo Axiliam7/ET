@@ -285,6 +285,31 @@ code {
   margin: 0 0 0.65rem;
 }
 
+.quiz-hints {
+  margin: 0.35rem 0 0.75rem;
+}
+
+.quiz-hint {
+  font-weight: 400;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  margin: 0 0 0.5rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  background: var(--surface-2);
+}
+
+.quiz-hint-label {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.quiz-hint-btn {
+  font-size: 0.9rem;
+  padding: 0.4rem 0.65rem;
+}
+
 .options {
   display: flex;
   flex-direction: column;
@@ -422,4 +447,150 @@ code {
 
 .callout strong {
   color: var(--accent);
+}
+
+/* PrimeBot (pedagogical agent) */
+.primebot {
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: var(--radius);
+  background: rgba(56, 189, 248, 0.06);
+  padding: 0.9rem 1rem;
+  margin: 0.75rem 0;
+}
+
+.primebot:first-child {
+  margin-top: 0;
+}
+
+.primebot:last-child {
+  margin-bottom: 0;
+}
+
+.primebot-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.primebot-avatar {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.primebot-name {
+  font-family: var(--font-read);
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--accent);
+}
+
+.primebot-content {
+  font-family: var(--font-ui);
+  font-size: 0.98rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.primebot-content p {
+  margin: 0 0 0.5rem;
+}
+
+.primebot-content p:last-child {
+  margin-bottom: 0;
+}
+
+.primebot-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+/* Guided practice / remedial scaffolding */
+.scaffold-actions {
+  margin-top: 0.35rem;
+  margin-bottom: 0;
+}
+
+.scaffold-block {
+  margin-top: 0.65rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  font-size: 0.98rem;
+  line-height: 1.5;
+}
+
+.scaffold-hint {
+  background: rgba(56, 189, 104, 0.08);
+  border-color: rgba(52, 211, 153, 0.35);
+}
+
+.scaffold-solution {
+  background: rgba(56, 189, 248, 0.08);
+  border-color: rgba(56, 189, 248, 0.3);
+}
+
+.scaffold-label {
+  display: block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  margin-bottom: 0.35rem;
+}
+
+.scaffold-hint .scaffold-label {
+  color: var(--success);
+}
+
+.guided-practice-item {
+  margin-bottom: 1.35rem;
+  padding-bottom: 1.1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.guided-practice-item:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+/* Remedial erroneous-example block */
+.erroneous-example-block {
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+  border-left: 3px solid var(--warn);
+  background: var(--surface-2);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.erroneous-example-heading {
+  font-family: var(--font-read);
+  font-size: 1.05rem;
+  margin: 0 0 0.5rem;
+  color: var(--warn);
+}
+
+.erroneous-example-prompt {
+  font-family: var(--font-ui);
+  font-size: 0.95rem;
+  color: var(--muted);
+  margin: 0 0 0.65rem;
+  font-style: italic;
+}
+
+.extra-help-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: rgba(251, 191, 36, 0.15);
+  color: var(--warn);
+  border: 1px solid rgba(251, 191, 36, 0.4);
 }

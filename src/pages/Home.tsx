@@ -1,62 +1,91 @@
 import { Link } from "react-router-dom";
 import { primeTimeChapter } from "../data/primeTimeChapter";
 import { useLearner } from "../context/LearnerContext";
-import { getRecommendations } from "../lib/learnerModel";
 
 export function Home() {
   const { state, reset } = useLearner();
-  const recs = getRecommendations(state);
   const { meta, lessons } = primeTimeChapter;
+  const firstLesson = lessons[0];
+
+  const nextLesson =
+    lessons.find((l) => !state.completedLessons.includes(l.slug)) ?? null;
+  const continueLesson = nextLesson ?? (state.completedLessons.length > 0 ? lessons[lessons.length - 1] : null);
+  const canContinue = continueLesson != null && state.completedLessons.length > 0;
 
   return (
     <>
       <h1 className="page-title">{meta.title}</h1>
-      <p className="lead">{meta.description}</p>
+      <p className="lead">Short lessons. Quick practice. Friendly help.</p>
 
       <div className="card">
-        <h2>How this chapter is organized</h2>
-        <p className="reading">
-          You move through six lessons that build from the meaning of factors to
-          applications of GCF and LCM. Each lesson has objectives, explanations,
-          guided practice with solutions, and a short checkpoint quiz. A final
-          unit assessment draws on all ideas together.
+        <h2>Start</h2>
+        <p className="reading" style={{ marginTop: "-0.25rem" }}>
+          Ready to learn? Tap the big button.
         </p>
-        <h3>Adaptation (learner model)</h3>
-        <p className="reading">
-          After each quiz, the system updates a <strong>mastery estimate</strong>{" "}
-          per concept (0–100%) using a weighted blend of your recent scores. The{" "}
-          <Link to="/progress">Progress</Link> page shows recommendations: if a
-          prerequisite is weak, you are nudged to review earlier ideas before
-          stretching ahead; consistently strong work unlocks stretch suggestions.
-        </p>
-        <div className="callout">
-          <strong>Try it:</strong> complete a lesson quiz—your profile updates and
-          the recommendation list refreshes.
-        </div>
         <div className="btn-row">
-          <Link className="btn btn-primary" to={`/lesson/${lessons[0].slug}`}>
-            Begin lesson 1
+          <Link
+            className="btn btn-primary"
+            style={{ fontSize: "1.1rem", padding: "0.85rem 1.25rem" }}
+            to={`/lesson/${firstLesson.slug}`}
+          >
+            Start Learning
           </Link>
-          <Link className="btn" to="/progress">
-            View progress
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>Continue where you left off</h2>
+        {canContinue ? (
+          <>
+            <p className="reading" style={{ marginTop: "-0.25rem" }}>
+              Jump back in with your next lesson.
+            </p>
+            <div className="btn-row">
+              <Link
+                className="btn"
+                style={{ fontSize: "1.05rem", padding: "0.75rem 1.1rem" }}
+                to={`/lesson/${continueLesson!.slug}`}
+              >
+                Continue: {continueLesson!.shortTitle}
+              </Link>
+            </div>
+          </>
+        ) : (
+          <p className="reading" style={{ marginTop: "-0.25rem" }}>
+            No saved spot yet. Start learning and I’ll remember your place on this device.
+          </p>
+        )}
+      </div>
+
+      <div className="card">
+        <h2>Progress</h2>
+        <p className="reading" style={{ marginTop: "-0.25rem" }}>
+          See what you’ve finished and what to try next.
+        </p>
+        <div className="btn-row">
+          <Link className="btn" style={{ fontSize: "1.05rem", padding: "0.75rem 1.1rem" }} to="/progress">
+            View Progress
+          </Link>
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>Final challenge</h2>
+        <p className="reading" style={{ marginTop: "-0.25rem" }}>
+          Ready for a bigger challenge? Try the chapter check.
+        </p>
+        <div className="btn-row">
+          <Link
+            className="btn btn-primary"
+            style={{ fontSize: "1.05rem", padding: "0.75rem 1.1rem" }}
+            to="/assessment"
+          >
+            Take Final Challenge
           </Link>
           <button type="button" className="btn" onClick={reset}>
             Reset saved progress
           </button>
         </div>
-      </div>
-
-      <div className="card">
-        <h2>Current recommendations</h2>
-        <ul className="reading">
-          {recs.map((r, i) => (
-            <li key={i}>
-              <span className="badge recommend">{r.kind.replace(/_/g, " ")}</span>{" "}
-              {r.message}{" "}
-              <span style={{ color: "var(--muted)" }}>({r.reason})</span>
-            </li>
-          ))}
-        </ul>
       </div>
     </>
   );
