@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import mongoose from 'mongoose';
+import rateLimit from 'express-rate-limit';
 import progressRoutes from './routes/progress.js';
 
 dotenv.config();
@@ -13,6 +14,14 @@ app.use(cors({
   credentials: true,
 }));
 app.use(express.json());
+
+const progressLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' },
+});
 
 const connectDB = async () => {
   try {
@@ -30,7 +39,7 @@ app.get('/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
-app.use('/api/progress', progressRoutes);
+app.use('/api/progress', progressLimiter, progressRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Endpoint not found' });
