@@ -23,15 +23,57 @@ const progressLimiter = rateLimit({
   message: { error: 'Too many requests, please try again later.' },
 });
 
-const connectDB = async () => {
-  try {
-    await mongoose.connect(process.env.MONGODB_URI);
-    console.log('✓ Connected to MongoDB');
-  } catch (err) {
-    console.error('✗ MongoDB connection failed:', err.message);
+const MONGO_OPTIONS = {
+  serverSelectionTimeoutMS: 10000,
+  connectTimeoutMS: 10000,
+  socketTimeoutMS: 45000,
+  retryWrites: true,
+  w: 'majority',
+};
+
+const MAX_RETRIES = 5;
+const RETRY_BASE_MS = 5000;
+
+let retryTimer = null;
+
+const connectDB = async (attempt = 1) => {
+  if (!process.env.MONGODB_URI) {
+    console.error('✗ MONGODB_URI environment variable is not set. Cannot connect to MongoDB.');
     process.exit(1);
   }
+
+  try {
+    await mongoose.connect(process.env.MONGODB_URI, MONGO_OPTIONS);
+    console.log('✓ Connected to MongoDB');
+  } catch (err) {
+    console.error(`✗ MongoDB connection failed (attempt ${attempt}/${MAX_RETRIES}): ${err.message}`);
+    if (attempt < MAX_RETRIES) {
+      const delay = Math.pow(2, attempt - 1) * RETRY_BASE_MS;
+      console.log(`  Retrying in ${delay / 1000}s…`);
+      retryTimer = setTimeout(() => connectDB(attempt + 1), delay);
+    } else {
+      console.error('  Max retries reached. Exiting.');
+      process.exit(1);
+    }
+  }
 };
+
+mongoose.connection.on('disconnected', () => {
+  console.warn('⚠ MongoDB disconnected. Attempting to reconnect…');
+  connectDB(1);
+});
+
+mongoose.connection.on('error', (err) => {
+  console.error('✗ MongoDB connection error:', err.message);
+});
+
+const gracefulShutdown = (signal) => {
+  console.log(`\n${signal} received. Closing server…`);
+  if (retryTimer) clearTimeout(retryTimer);
+  mongoose.connection.close().then(() => process.exit(0));
+};
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 connectDB();
 
