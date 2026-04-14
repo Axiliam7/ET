@@ -30,7 +30,8 @@ function isValidString(value) {
 router.post('/save', async (req, res) => {
   const { userId, learnerState } = req.body;
 
-  if (!isValidString(userId)) {
+  // Explicit type guard before string validation to prevent NoSQL injection
+  if (typeof userId !== 'string' || !isValidString(userId)) {
     return res.status(400).json({ success: false, message: 'userId must be a non-empty string' });
   }
 
@@ -61,7 +62,8 @@ router.post('/save', async (req, res) => {
 router.get('/load', async (req, res) => {
   const { userId } = req.query;
 
-  if (!isValidString(userId)) {
+  // Explicit type guard: query params can be arrays/objects (e.g. ?userId[]=val)
+  if (typeof userId !== 'string' || !isValidString(userId)) {
     return res.status(400).json({ success: false, message: 'userId must be a non-empty string' });
   }
 
