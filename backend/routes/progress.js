@@ -1,50 +1,82 @@
-'use strict';
-
-const express = require('express');
-const authMiddleware = require('../middleware/authMiddleware');
-const Progress = require('../models/Progress');
-const User = require('../models/User');
+import express from 'express';
+import rateLimit from 'express-rate-limit';
+import Progress from '../models/Progress.js';
 
 const router = express.Router();
 
-// POST /save: Save or update user progress
-router.post('/save', authMiddleware, async (req, res) => {
-    const userId = req.user.id; // Assuming user ID is stored in token
-    const { progressData } = req.body;
-    try {
-        // Upsert user progress
-        await Progress.findOneAndUpdate({ user: userId }, { progress: progressData }, { upsert: true, new: true });
-        // Upsert user profile
-        await User.findOneAndUpdate({ _id: userId }, { lastUpdated: new Date() }, { upsert: true, new: true });
-        res.status(200).json({ message: 'Progress saved successfully.' });
-    } catch (error) {
-        res.status(500).json({ message: 'Error saving progress', error });
-    }
+// Rate limiter: max 60 requests per minute per IP
+const limiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many requests, please try again later.' },
 });
 
-// GET /load: Load user progress or create empty record
-router.get('/load', authMiddleware, async (req, res) => {
-    const userId = req.user.id; // Assuming user ID is stored in token
-    try {
-        const userProgress = await Progress.findOne({ user: userId }) || { progress: {} }; // Creates empty record if new user
-        res.status(200).json(userProgress);
-    } catch (error) {
-        res.status(500).json({ message: 'Error loading progress', error });
+router.use(limiter);
+
+/**
+ * Ensure a value is a non-empty string to prevent NoSQL injection.
+ */
+function isValidString(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+/**
+ * POST /api/progress/save
+ * Body: { userId: string, learnerState: object }
+ * Upserts the learner state document for the given userId.
+ */
+router.post('/save', async (req, res) => {
+  const { userId, learnerState } = req.body;
+
+  if (!isValidString(userId)) {
+    return res.status(400).json({ success: false, message: 'userId must be a non-empty string' });
+  }
+
+  if (learnerState === undefined || learnerState === null) {
+    return res.status(400).json({ success: false, message: 'learnerState is required' });
+  }
+
+  try {
+    await Progress.findOneAndUpdate(
+      { userId: userId.trim() },
+      { learnerState },
+      { upsert: true, new: true, runValidators: true }
+    );
+    return res.status(200).json({ success: true, message: 'Progress saved' });
+  } catch (err) {
+    if (err.name === 'ValidationError') {
+      return res.status(400).json({ success: false, message: err.message });
     }
+    console.error('[progress/save] error:', err.message);
+    return res.status(500).json({ success: false, message: 'Server error while saving progress' });
+  }
 });
 
-// GET /user: Retrieve user profile info
-router.get('/user', authMiddleware, async (req, res) => {
-    const userId = req.user.id; // Assuming user ID is stored in token
-    try {
-        const userProfile = await User.findById(userId);
-        if (!userProfile) {
-            return res.status(404).json({ message: 'User not found' });
-        }
-        res.status(200).json(userProfile);
-    } catch (error) {
-        res.status(500).json({ message: 'Error retrieving user', error });
+/**
+ * GET /api/progress/load?userId=...
+ * Returns the stored learnerState for the userId, or an empty default if not found.
+ */
+router.get('/load', async (req, res) => {
+  const { userId } = req.query;
+
+  if (!isValidString(userId)) {
+    return res.status(400).json({ success: false, message: 'userId must be a non-empty string' });
+  }
+
+  try {
+    const doc = await Progress.findOne({ userId: userId.trim() });
+
+    if (!doc) {
+      return res.status(200).json({ learnerState: {} });
     }
+
+    return res.status(200).json({ learnerState: doc.learnerState });
+  } catch (err) {
+    console.error('[progress/load] error:', err.message);
+    return res.status(500).json({ success: false, message: 'Server error while loading progress' });
+  }
 });
 
-module.exports = router;
+export default router;
