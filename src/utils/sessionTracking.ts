@@ -38,7 +38,9 @@ export type SubmitSessionResult = {
 
 const CHAPTER_ID = "grade6_prime_time" as const;
 const DASHBOARD_URL = "https://kaushik-dev.online/dashboard";
-const MERGE_API_URL = "https://kaushik-dev.online/api/recommend/";
+const MERGE_API_URL =
+  String(import.meta.env.VITE_MERGE_API_URL ?? "").trim() ||
+  "https://kaushik-dev.online/api/recommend/";
 const MAX_RETRY_ATTEMPTS = 3;
 const PENDING_PAYLOAD_KEY = "pendingPayload";
 
@@ -219,7 +221,9 @@ function validatePayloadShape(payload: SessionPayload): SessionPayload {
   ].sort();
 
   if (keys.length !== expectedKeys.length || keys.some((k, i) => k !== expectedKeys[i])) {
-    throw new Error("Invalid payload shape");
+    throw new Error(
+      `Invalid payload shape. expected=[${expectedKeys.join(",")}], received=[${keys.join(",")}]`
+    );
   }
 
   if (!payload.student_id.trim() || !payload.session_id.trim()) {
@@ -256,8 +260,8 @@ function validatePayloadShape(payload: SessionPayload): SessionPayload {
   if (payload.questions_attempted > payload.total_questions) {
     throw new Error("questions_attempted cannot exceed total_questions");
   }
-  if (payload.correct_answers + payload.wrong_answers !== payload.questions_attempted) {
-    throw new Error("correct_answers + wrong_answers must equal questions_attempted");
+  if (payload.correct_answers + payload.wrong_answers > payload.questions_attempted) {
+    throw new Error("correct_answers + wrong_answers cannot exceed questions_attempted");
   }
   if (payload.hints_used > payload.total_hints_embedded) {
     throw new Error("hints_used cannot exceed total_hints_embedded");
