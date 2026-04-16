@@ -12,7 +12,7 @@ export type SessionMetrics = {
 };
 
 export type SessionPayload = SessionMetrics & {
-  chapter_id: "grade6_prime_time";
+  chapter_id: typeof CHAPTER_ID;
   student_id: string | null;
   session_id: string | null;
   status: SessionStatus;
@@ -22,7 +22,9 @@ export type SessionPayload = SessionMetrics & {
 };
 
 const CHAPTER_ID = "grade6_prime_time" as const;
-const DASHBOARD_URL = "https://kaushik-dev.online/dashboard";
+const COMPLETION_RATIO_PRECISION = 4;
+const DASHBOARD_URL = String(import.meta.env.VITE_DASHBOARD_URL ?? "").trim()
+  || "https://kaushik-dev.online/dashboard";
 const MERGE_API_URL = String(import.meta.env.VITE_MERGE_API_URL ?? "").trim();
 
 const STORAGE_KEYS = {
@@ -35,6 +37,7 @@ const STORAGE_KEYS = {
 
 let activeSubmission: Promise<boolean> | null = null;
 let exitHandlersAttached = false;
+let detachExitHandlers: (() => void) | null = null;
 
 function safeSessionStorage(): Storage | null {
   try {
@@ -125,7 +128,13 @@ function persistUrlParam(params: URLSearchParams, paramName: string): string | n
 }
 
 function sendExitBeacon(payload: SessionPayload): boolean {
-  if (!MERGE_API_URL || typeof navigator.sendBeacon !== "function") {
+  if (!MERGE_API_URL) {
+    console.warn("[sessionTracking] VITE_MERGE_API_URL is not configured for beacon submit");
+    return false;
+  }
+
+  if (typeof navigator.sendBeacon !== "function") {
+    console.warn("[sessionTracking] navigator.sendBeacon is not available in this browser");
     return false;
   }
 
@@ -138,6 +147,10 @@ export function extractSessionParams(): {
   student_id: string | null;
   session_id: string | null;
 } {
+  if (typeof window === "undefined") {
+    return { token: null, student_id: null, session_id: null };
+  }
+
   const params = new URLSearchParams(window.location.search);
 
   const token = persistUrlParam(params, STORAGE_KEYS.token);
@@ -159,13 +172,24 @@ export function updateSessionMetrics(patch: Partial<SessionMetrics>): SessionMet
 export function buildPayload(status: SessionStatus): SessionPayload {
   const metrics = readStoredMetrics();
   const nowMs = Date.now();
-  const startMs = Date.parse(metrics.start_time);
+  const startMs = new Date(metrics.start_time).getTime();
+  if (!Number.isFinite(startMs)) {
+    console.warn(
+      "[sessionTracking] Invalid start_time:",
+      metrics.start_time,
+      "Falling back to current timestamp for time calculation."
+    );
+  }
   const start = Number.isFinite(startMs) ? startMs : nowMs;
 
   const time_spent_seconds = Math.max(0, Math.floor((nowMs - start) / 1000));
   const topic_completion_ratio =
     metrics.total_questions > 0
-      ? Number((metrics.questions_attempted / metrics.total_questions).toFixed(4))
+      ? Number(
+          (metrics.questions_attempted / metrics.total_questions).toFixed(
+            COMPLETION_RATIO_PRECISION
+          )
+        )
       : 0;
 
   return {
@@ -193,10 +217,13 @@ export async function submitSession(status: SessionStatus): Promise<boolean> {
 
   const token = getStoredValue(STORAGE_KEYS.token);
   if (!MERGE_API_URL || !token) {
-    activeSubmission = Promise.resolve(false);
-    const result = await activeSubmission;
-    activeSubmission = null;
-    return result;
+    if (!MERGE_API_URL) {
+      console.warn("[sessionTracking] VITE_MERGE_API_URL is not configured for submitSession");
+    }
+    if (!token) {
+      console.warn("[sessionTracking] token is missing; cannot set Authorization header");
+    }
+    return false;
   }
 
   activeSubmission = fetch(MERGE_API_URL, {
@@ -218,10 +245,17 @@ export async function submitSession(status: SessionStatus): Promise<boolean> {
 }
 
 export function setupExitHandlers(): () => void {
-  if (exitHandlersAttached) return () => undefined;
+  if (exitHandlersAttached) {
+    if (detachExitHandlers) return detachExitHandlers;
+    return () => undefined;
+  }
   exitHandlersAttached = true;
+  let cleaned = false;
+  let exiting = false;
 
   const onExit = () => {
+    if (exiting) return;
+    exiting = true;
     if (wasSubmitted()) return;
     const payload = buildPayload("exited_midway");
     markSubmitted();
@@ -236,28 +270,33 @@ export function setupExitHandlers(): () => void {
 
   window.addEventListener("beforeunload", onExit);
   window.addEventListener("pagehide", onExit);
-  window.addEventListener("popstate", onExit);
   document.addEventListener("visibilitychange", onVisibilityChange);
 
-  return () => {
-    if (!exitHandlersAttached) return;
+  detachExitHandlers = () => {
+    if (cleaned) return;
+    cleaned = true;
     exitHandlersAttached = false;
+    detachExitHandlers = null;
     window.removeEventListener("beforeunload", onExit);
     window.removeEventListener("pagehide", onExit);
-    window.removeEventListener("popstate", onExit);
     document.removeEventListener("visibilitychange", onVisibilityChange);
   };
+
+  return detachExitHandlers;
 }
 
 export async function confirmReturnToDashboard(): Promise<void> {
   const shouldLeave = window.confirm(
-    "Return to dashboard now? Your current session will be submitted once before leaving."
+    "Return to dashboard now? We will attempt to submit your current session before leaving."
   );
 
   if (!shouldLeave) return;
 
   try {
-    await submitSession("exited_midway");
+    const submitted = await submitSession("exited_midway");
+    if (!submitted) {
+      console.warn("[sessionTracking] Unable to confirm exit submission before redirect");
+    }
   } finally {
     window.location.href = DASHBOARD_URL;
   }
