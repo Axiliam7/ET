@@ -318,11 +318,20 @@ export function buildValidPayload(trackedData: SessionPayload): SessionPayload {
     total_questions
   );
 
-  const correct_answers = Math.min(
+  let correct_answers = Math.min(
     toNonNegativeInt(trackedData.correct_answers),
     questions_attempted
   );
-  const wrong_answers = questions_attempted - correct_answers;
+  let wrong_answers = Math.min(toNonNegativeInt(trackedData.wrong_answers), questions_attempted);
+  const answerOverflow = correct_answers + wrong_answers - questions_attempted;
+  if (answerOverflow > 0) {
+    const wrongReduction = Math.min(wrong_answers, answerOverflow);
+    wrong_answers -= wrongReduction;
+    correct_answers -= answerOverflow - wrongReduction;
+  }
+  if (correct_answers + wrong_answers < questions_attempted) {
+    wrong_answers = questions_attempted - correct_answers;
+  }
 
   const payload: SessionPayload = {
     ...trackedData,
@@ -350,13 +359,18 @@ export async function submitSessionOnce(
   const token = parseTokenFromStorage();
   if (!token) return { ok: false };
 
-  const response = await axios.post(MERGE_API_URL, payload, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  });
+  try {
+    const response = await axios.post(MERGE_API_URL, payload, {
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+    });
 
-  return { ok: true, responseData: response.data };
+    return { ok: true, responseData: response.data };
+  } catch {
+    return { ok: false };
+  }
 }
 
 async function postSessionPayload(
@@ -364,11 +378,8 @@ async function postSessionPayload(
   attempts = MAX_RETRY_ATTEMPTS
 ): Promise<{ ok: boolean; responseData?: unknown }> {
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      return await submitSessionOnce(payload);
-    } catch {
-      // Continue to retry.
-    }
+    const result = await submitSessionOnce(payload);
+    if (result.ok) return result;
 
     if (attempt < attempts) {
       await delay(2 ** (attempt - 1) * 300);
