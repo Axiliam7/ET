@@ -1,3 +1,5 @@
+import axios from "axios";
+
 export type SessionStatus = "completed" | "exited_midway";
 
 type StoredSessionMetrics = {
@@ -260,8 +262,11 @@ function validatePayloadShape(payload: SessionPayload): SessionPayload {
   if (payload.questions_attempted > payload.total_questions) {
     throw new Error("questions_attempted cannot exceed total_questions");
   }
-  if (payload.correct_answers + payload.wrong_answers > payload.questions_attempted) {
-    throw new Error("correct_answers + wrong_answers cannot exceed questions_attempted");
+  if (payload.correct_answers + payload.wrong_answers !== payload.questions_attempted) {
+    throw new Error("correct_answers + wrong_answers must equal questions_attempted");
+  }
+  if (payload.retry_count > payload.questions_attempted) {
+    throw new Error("retry_count cannot exceed questions_attempted");
   }
   if (payload.hints_used > payload.total_hints_embedded) {
     throw new Error("hints_used cannot exceed total_hints_embedded");
@@ -306,35 +311,75 @@ async function delay(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export function buildValidPayload(trackedData: SessionPayload): SessionPayload {
+  const total_questions = toNonNegativeInt(trackedData.total_questions);
+  const questions_attempted = Math.min(
+    toNonNegativeInt(trackedData.questions_attempted),
+    total_questions
+  );
+
+  let correct_answers = Math.min(
+    toNonNegativeInt(trackedData.correct_answers),
+    questions_attempted
+  );
+  let wrong_answers = Math.min(toNonNegativeInt(trackedData.wrong_answers), questions_attempted);
+  const answerOverflow = correct_answers + wrong_answers - questions_attempted;
+  if (answerOverflow > 0) {
+    const wrongReduction = Math.min(wrong_answers, answerOverflow);
+    wrong_answers -= wrongReduction;
+    correct_answers -= answerOverflow - wrongReduction;
+  }
+  if (correct_answers + wrong_answers < questions_attempted) {
+    wrong_answers = questions_attempted - correct_answers;
+  }
+
+  const payload: SessionPayload = {
+    ...trackedData,
+    total_questions,
+    questions_attempted,
+    correct_answers,
+    wrong_answers,
+    retry_count: Math.min(toNonNegativeInt(trackedData.retry_count), questions_attempted),
+    hints_used: Math.min(
+      toNonNegativeInt(trackedData.hints_used),
+      toNonNegativeInt(trackedData.total_hints_embedded)
+    ),
+    total_hints_embedded: toNonNegativeInt(trackedData.total_hints_embedded),
+    topic_completion_ratio: toRatio(trackedData.topic_completion_ratio),
+    session_status:
+      questions_attempted === total_questions ? "completed" : "exited_midway",
+  };
+
+  return validatePayloadShape(payload);
+}
+
+export async function submitSessionOnce(
+  payload: SessionPayload
+): Promise<{ ok: boolean; responseData?: unknown }> {
+  const token = parseTokenFromStorage();
+  if (!token) return { ok: false };
+
+  try {
+    const response = await axios.post(MERGE_API_URL, payload, {
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    return { ok: true, responseData: response.data };
+  } catch {
+    return { ok: false };
+  }
+}
+
 async function postSessionPayload(
   payload: SessionPayload,
-  token: string,
   attempts = MAX_RETRY_ATTEMPTS
 ): Promise<{ ok: boolean; responseData?: unknown }> {
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      const response = await fetch(MERGE_API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(payload),
-        keepalive: true,
-      });
-
-      if (response.ok) {
-        let responseData: unknown = null;
-        try {
-          responseData = await response.json();
-        } catch {
-          responseData = null;
-        }
-        return { ok: true, responseData };
-      }
-    } catch {
-      // Continue to retry.
-    }
+    const result = await submitSessionOnce(payload);
+    if (result.ok) return result;
 
     if (attempt < attempts) {
       await delay(2 ** (attempt - 1) * 300);
@@ -475,7 +520,7 @@ export function buildPayload(status: SessionStatus): SessionPayload {
     topic_completion_ratio,
   };
 
-  return validatePayloadShape(payload);
+  return buildValidPayload(payload);
 }
 
 export async function retryPendingSubmission(): Promise<boolean> {
@@ -488,7 +533,7 @@ export async function retryPendingSubmission(): Promise<boolean> {
     const token = parseTokenFromStorage();
     if (!token) return false;
 
-    const result = await postSessionPayload(pendingPayload, token);
+    const result = await postSessionPayload(pendingPayload);
     if (!result.ok) return false;
 
     clearPendingPayload();
@@ -528,7 +573,7 @@ export async function submitSession(status: SessionStatus): Promise<SubmitSessio
       return { ok: false, status: "queued_pending" };
     }
 
-    const response = await postSessionPayload(payload, token);
+    const response = await postSessionPayload(payload);
     if (response.ok) {
       clearPendingPayload();
       markSubmitted();
