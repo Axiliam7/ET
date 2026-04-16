@@ -1,6 +1,6 @@
-export type SessionStatus = "completed" | "exited_midway" | (string & {});
+export type SessionStatus = "completed" | "exited_midway";
 
-export type SessionMetrics = {
+type StoredSessionMetrics = {
   correct_answers: number;
   wrong_answers: number;
   questions_attempted: number;
@@ -8,34 +8,50 @@ export type SessionMetrics = {
   retry_count: number;
   hints_used: number;
   total_hints_embedded: number;
-  start_time: string;
+  start_time_ms: number;
+  completed_units: number;
+  total_units: number;
 };
 
-export type SessionPayload = SessionMetrics & {
+export type SessionPayload = {
+  student_id: string;
+  session_id: string;
   chapter_id: typeof CHAPTER_ID;
-  student_id: string | null;
-  session_id: string | null;
-  status: SessionStatus;
+  timestamp: string;
+  session_status: SessionStatus;
+  correct_answers: number;
+  wrong_answers: number;
+  questions_attempted: number;
+  total_questions: number;
+  retry_count: number;
+  hints_used: number;
+  total_hints_embedded: number;
   time_spent_seconds: number;
   topic_completion_ratio: number;
-  submitted_at: string;
+};
+
+export type SubmitSessionResult = {
+  ok: boolean;
+  status: "submitted" | "already_submitted" | "queued_pending" | "invalid";
+  responseData?: unknown;
 };
 
 const CHAPTER_ID = "grade6_prime_time" as const;
-const COMPLETION_RATIO_PRECISION = 4;
-const DASHBOARD_URL = String(import.meta.env.VITE_DASHBOARD_URL ?? "").trim()
-  || "https://kaushik-dev.online/dashboard";
-const MERGE_API_URL = String(import.meta.env.VITE_MERGE_API_URL ?? "").trim();
+const DASHBOARD_URL = "https://kaushik-dev.online/dashboard";
+const MERGE_API_URL = "https://kaushik-dev.online/api/recommend/";
+const MAX_RETRY_ATTEMPTS = 3;
+const PENDING_PAYLOAD_KEY = "pendingPayload";
 
 const STORAGE_KEYS = {
   token: "token",
   studentId: "student_id",
   sessionId: "session_id",
-  metrics: "et_session_metrics_v1",
-  submitted: "et_session_submitted_v1",
+  metrics: "et_session_metrics_v2",
+  submitted: "submitted",
 };
 
-let activeSubmission: Promise<boolean> | null = null;
+let activeSubmission: Promise<SubmitSessionResult> | null = null;
+let activePendingReplay: Promise<boolean> | null = null;
 let exitHandlersAttached = false;
 let detachExitHandlers: (() => void) | null = null;
 
@@ -47,18 +63,47 @@ function safeSessionStorage(): Storage | null {
   }
 }
 
+function safeLocalStorage(): Storage | null {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
 function toNonNegativeInt(value: unknown, fallback = 0): number {
   const num = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(num)) return fallback;
   return Math.max(0, Math.floor(num));
 }
 
-function normalizeMetrics(input: Partial<SessionMetrics> | null | undefined): SessionMetrics {
-  const start =
-    typeof input?.start_time === "string" && input.start_time.trim().length > 0
-      ? input.start_time
-      : new Date().toISOString();
+function toRatio(value: unknown): number {
+  const num = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(num)) return 0;
+  if (num <= 0) return 0;
+  if (num >= 1) return 1;
+  return Number(num.toFixed(4));
+}
 
+function defaultMetrics(): StoredSessionMetrics {
+  return {
+    correct_answers: 0,
+    wrong_answers: 0,
+    questions_attempted: 0,
+    total_questions: 0,
+    retry_count: 0,
+    hints_used: 0,
+    total_hints_embedded: 0,
+    start_time_ms: Date.now(),
+    completed_units: 0,
+    total_units: 0,
+  };
+}
+
+function normalizeMetrics(
+  input: Partial<StoredSessionMetrics> | null | undefined
+): StoredSessionMetrics {
+  const defaults = defaultMetrics();
   return {
     correct_answers: toNonNegativeInt(input?.correct_answers),
     wrong_answers: toNonNegativeInt(input?.wrong_answers),
@@ -67,44 +112,36 @@ function normalizeMetrics(input: Partial<SessionMetrics> | null | undefined): Se
     retry_count: toNonNegativeInt(input?.retry_count),
     hints_used: toNonNegativeInt(input?.hints_used),
     total_hints_embedded: toNonNegativeInt(input?.total_hints_embedded),
-    start_time: start,
+    start_time_ms: toNonNegativeInt(input?.start_time_ms, defaults.start_time_ms),
+    completed_units: toNonNegativeInt(input?.completed_units),
+    total_units: toNonNegativeInt(input?.total_units),
   };
 }
 
-function readStoredMetrics(): SessionMetrics {
+function readStoredMetrics(): StoredSessionMetrics {
   const storage = safeSessionStorage();
-  if (!storage) return normalizeMetrics(null);
+  if (!storage) return defaultMetrics();
 
   const raw = storage.getItem(STORAGE_KEYS.metrics);
   if (!raw) {
-    const initial = normalizeMetrics(null);
+    const initial = defaultMetrics();
     storage.setItem(STORAGE_KEYS.metrics, JSON.stringify(initial));
     return initial;
   }
 
   try {
-    return normalizeMetrics(JSON.parse(raw) as Partial<SessionMetrics>);
+    return normalizeMetrics(JSON.parse(raw) as Partial<StoredSessionMetrics>);
   } catch {
-    const reset = normalizeMetrics(null);
+    const reset = defaultMetrics();
     storage.setItem(STORAGE_KEYS.metrics, JSON.stringify(reset));
     return reset;
   }
 }
 
-function writeStoredMetrics(next: SessionMetrics): void {
+function writeStoredMetrics(next: StoredSessionMetrics): void {
   const storage = safeSessionStorage();
   if (!storage) return;
-  storage.setItem(STORAGE_KEYS.metrics, JSON.stringify(next));
-}
-
-function wasSubmitted(): boolean {
-  const storage = safeSessionStorage();
-  return storage?.getItem(STORAGE_KEYS.submitted) === "1";
-}
-
-function markSubmitted(): void {
-  const storage = safeSessionStorage();
-  storage?.setItem(STORAGE_KEYS.submitted, "1");
+  storage.setItem(STORAGE_KEYS.metrics, JSON.stringify(normalizeMetrics(next)));
 }
 
 function getStoredValue(key: string): string | null {
@@ -115,6 +152,37 @@ function getStoredValue(key: string): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function wasSubmitted(): boolean {
+  const storage = safeSessionStorage();
+  return storage?.getItem(STORAGE_KEYS.submitted) === "true";
+}
+
+function markSubmitted(): void {
+  const storage = safeSessionStorage();
+  storage?.setItem(STORAGE_KEYS.submitted, "true");
+}
+
+function clearSubmittedFlag(): void {
+  const storage = safeSessionStorage();
+  storage?.removeItem(STORAGE_KEYS.submitted);
+}
+
+function parseTokenFromStorage(): string | null {
+  return getStoredValue(STORAGE_KEYS.token);
+}
+
+function parseStoredIds(): { student_id: string; session_id: string } | null {
+  const student_id = getStoredValue(STORAGE_KEYS.studentId);
+  const session_id = getStoredValue(STORAGE_KEYS.sessionId);
+  if (!student_id || !session_id) return null;
+  return { student_id, session_id };
+}
+
+function setStoredString(key: string, value: string): void {
+  const storage = safeSessionStorage();
+  storage?.setItem(key, value);
+}
+
 function persistUrlParam(params: URLSearchParams, paramName: string): string | null {
   const raw = params.get(paramName);
   if (typeof raw !== "string") return getStoredValue(paramName);
@@ -122,24 +190,168 @@ function persistUrlParam(params: URLSearchParams, paramName: string): string | n
   const trimmed = raw.trim();
   if (!trimmed) return getStoredValue(paramName);
 
-  const storage = safeSessionStorage();
-  storage?.setItem(paramName, trimmed);
+  setStoredString(paramName, trimmed);
   return trimmed;
 }
 
-function sendExitBeacon(payload: SessionPayload): boolean {
-  if (!MERGE_API_URL) {
-    console.warn("[sessionTracking] VITE_MERGE_API_URL is not configured for beacon submit");
-    return false;
+function isValidTimestamp(value: string): boolean {
+  const t = Date.parse(value);
+  return Number.isFinite(t);
+}
+
+function validatePayloadShape(payload: SessionPayload): SessionPayload {
+  const keys = Object.keys(payload).sort();
+  const expectedKeys = [
+    "chapter_id",
+    "correct_answers",
+    "hints_used",
+    "questions_attempted",
+    "retry_count",
+    "session_id",
+    "session_status",
+    "student_id",
+    "time_spent_seconds",
+    "timestamp",
+    "topic_completion_ratio",
+    "total_hints_embedded",
+    "total_questions",
+    "wrong_answers",
+  ].sort();
+
+  if (keys.length !== expectedKeys.length || keys.some((k, i) => k !== expectedKeys[i])) {
+    throw new Error("Invalid payload shape");
   }
 
+  if (!payload.student_id.trim() || !payload.session_id.trim()) {
+    throw new Error("Missing student_id or session_id");
+  }
+  if (payload.chapter_id !== CHAPTER_ID) {
+    throw new Error("Invalid chapter_id");
+  }
+  if (payload.session_status !== "completed" && payload.session_status !== "exited_midway") {
+    throw new Error("Invalid session_status");
+  }
+  if (!isValidTimestamp(payload.timestamp)) {
+    throw new Error("Invalid timestamp");
+  }
+
+  const integerFields: Array<keyof SessionPayload> = [
+    "correct_answers",
+    "wrong_answers",
+    "questions_attempted",
+    "total_questions",
+    "retry_count",
+    "hints_used",
+    "total_hints_embedded",
+    "time_spent_seconds",
+  ];
+
+  for (const field of integerFields) {
+    const value = payload[field];
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+      throw new Error(`Invalid ${String(field)}`);
+    }
+  }
+
+  if (payload.questions_attempted > payload.total_questions) {
+    throw new Error("questions_attempted cannot exceed total_questions");
+  }
+  if (payload.correct_answers + payload.wrong_answers !== payload.questions_attempted) {
+    throw new Error("correct_answers + wrong_answers must equal questions_attempted");
+  }
+  if (payload.hints_used > payload.total_hints_embedded) {
+    throw new Error("hints_used cannot exceed total_hints_embedded");
+  }
+  if (
+    typeof payload.topic_completion_ratio !== "number" ||
+    Number.isNaN(payload.topic_completion_ratio) ||
+    payload.topic_completion_ratio < 0 ||
+    payload.topic_completion_ratio > 1
+  ) {
+    throw new Error("Invalid topic_completion_ratio");
+  }
+
+  return payload;
+}
+
+function readPendingPayload(): SessionPayload | null {
+  const storage = safeLocalStorage();
+  const raw = storage?.getItem(PENDING_PAYLOAD_KEY);
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw) as SessionPayload;
+    return validatePayloadShape(parsed);
+  } catch {
+    storage?.removeItem(PENDING_PAYLOAD_KEY);
+    return null;
+  }
+}
+
+function queuePendingPayload(payload: SessionPayload): void {
+  const storage = safeLocalStorage();
+  storage?.setItem(PENDING_PAYLOAD_KEY, JSON.stringify(payload));
+}
+
+function clearPendingPayload(): void {
+  const storage = safeLocalStorage();
+  storage?.removeItem(PENDING_PAYLOAD_KEY);
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function postSessionPayload(
+  payload: SessionPayload,
+  token: string,
+  attempts = MAX_RETRY_ATTEMPTS
+): Promise<{ ok: boolean; responseData?: unknown }> {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetch(MERGE_API_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+        keepalive: true,
+      });
+
+      if (response.ok) {
+        let responseData: unknown = null;
+        try {
+          responseData = await response.json();
+        } catch {
+          responseData = null;
+        }
+        return { ok: true, responseData };
+      }
+    } catch {
+      // Continue to retry.
+    }
+
+    if (attempt < attempts) {
+      await delay(2 ** (attempt - 1) * 300);
+    }
+  }
+
+  return { ok: false };
+}
+
+function sendExitBeacon(payload: SessionPayload): boolean {
   if (typeof navigator.sendBeacon !== "function") {
-    console.warn("[sessionTracking] navigator.sendBeacon is not available in this browser");
     return false;
   }
 
   const body = new Blob([JSON.stringify(payload)], { type: "application/json" });
   return navigator.sendBeacon(MERGE_API_URL, body);
+}
+
+function resetForNewSession(): void {
+  clearSubmittedFlag();
+  writeStoredMetrics(defaultMetrics());
 }
 
 export function extractSessionParams(): {
@@ -152,94 +364,183 @@ export function extractSessionParams(): {
   }
 
   const params = new URLSearchParams(window.location.search);
+  const previousSessionId = getStoredValue(STORAGE_KEYS.sessionId);
 
   const token = persistUrlParam(params, STORAGE_KEYS.token);
   const student_id = persistUrlParam(params, STORAGE_KEYS.studentId);
   const session_id = persistUrlParam(params, STORAGE_KEYS.sessionId);
 
+  if (session_id && previousSessionId && session_id !== previousSessionId) {
+    resetForNewSession();
+  }
+
   readStoredMetrics();
+  void retryPendingSubmission();
 
   return { token, student_id, session_id };
 }
 
-export function updateSessionMetrics(patch: Partial<SessionMetrics>): SessionMetrics {
+export function updateSessionMetrics(
+  patch: Partial<
+    StoredSessionMetrics & {
+      topic_completion_ratio: number;
+    }
+  >
+): StoredSessionMetrics {
   const current = readStoredMetrics();
-  const merged = normalizeMetrics({ ...current, ...patch });
+  const merged = normalizeMetrics({
+    ...current,
+    ...patch,
+    completed_units: patch.completed_units ?? current.completed_units,
+    total_units: patch.total_units ?? current.total_units,
+  });
+
+  if (typeof patch.topic_completion_ratio === "number") {
+    merged.completed_units = Math.round(
+      toRatio(patch.topic_completion_ratio) * Math.max(merged.total_units, 0)
+    );
+  }
+
   writeStoredMetrics(merged);
   return merged;
 }
 
-export function buildPayload(status: SessionStatus): SessionPayload {
-  const metrics = readStoredMetrics();
-  const nowMs = Date.now();
-  const startMs = new Date(metrics.start_time).getTime();
-  if (!Number.isFinite(startMs)) {
-    console.warn(
-      "[sessionTracking] Invalid start_time:",
-      metrics.start_time,
-      "Falling back to current timestamp for time calculation."
-    );
-  }
-  const start = Number.isFinite(startMs) ? startMs : nowMs;
+export function recordSessionAttempt(input: {
+  questions_attempted: number;
+  correct_answers: number;
+  wrong_answers: number;
+  hints_used: number;
+  total_hints_embedded: number;
+  retry_count?: number;
+}): StoredSessionMetrics {
+  const current = readStoredMetrics();
 
-  const time_spent_seconds = Math.max(0, Math.floor((nowMs - start) / 1000));
-  const topic_completion_ratio =
-    metrics.total_questions > 0
-      ? Number(
-          (metrics.questions_attempted / metrics.total_questions).toFixed(
-            COMPLETION_RATIO_PRECISION
-          )
-        )
-      : 0;
+  const questions_attempted = toNonNegativeInt(input.questions_attempted);
+  const correct_answers = toNonNegativeInt(input.correct_answers);
+  const wrong_answers = toNonNegativeInt(input.wrong_answers);
+  const hints_used = toNonNegativeInt(input.hints_used);
+  const total_hints_embedded = toNonNegativeInt(input.total_hints_embedded);
+  const retry_count = toNonNegativeInt(input.retry_count ?? wrong_answers);
 
-  return {
-    chapter_id: CHAPTER_ID,
-    student_id: getStoredValue(STORAGE_KEYS.studentId),
-    session_id: getStoredValue(STORAGE_KEYS.sessionId),
-    status,
-    ...metrics,
-    time_spent_seconds,
-    topic_completion_ratio,
-    submitted_at: new Date(nowMs).toISOString(),
-  };
+  const next = normalizeMetrics({
+    ...current,
+    questions_attempted: current.questions_attempted + questions_attempted,
+    correct_answers: current.correct_answers + correct_answers,
+    wrong_answers: current.wrong_answers + wrong_answers,
+    hints_used: current.hints_used + hints_used,
+    total_hints_embedded: current.total_hints_embedded + total_hints_embedded,
+    retry_count: current.retry_count + retry_count,
+  });
+
+  writeStoredMetrics(next);
+  return next;
 }
 
-export async function submitSession(status: SessionStatus): Promise<boolean> {
-  if (wasSubmitted()) return true;
+export function buildPayload(status: SessionStatus): SessionPayload {
+  const ids = parseStoredIds();
+  if (!ids) {
+    throw new Error("Missing student_id or session_id in sessionStorage");
+  }
+
+  const metrics = readStoredMetrics();
+  const nowMs = Date.now();
+  const time_spent_seconds = Math.max(
+    0,
+    Math.floor((nowMs - Math.max(0, metrics.start_time_ms)) / 1000)
+  );
+
+  const topic_completion_ratio =
+    metrics.total_units > 0
+      ? toRatio(metrics.completed_units / metrics.total_units)
+      : 0;
+
+  const payload: SessionPayload = {
+    student_id: ids.student_id,
+    session_id: ids.session_id,
+    chapter_id: CHAPTER_ID,
+    timestamp: new Date(nowMs).toISOString(),
+    session_status: status,
+    correct_answers: metrics.correct_answers,
+    wrong_answers: metrics.wrong_answers,
+    questions_attempted: metrics.questions_attempted,
+    total_questions: metrics.total_questions,
+    retry_count: metrics.retry_count,
+    hints_used: metrics.hints_used,
+    total_hints_embedded: metrics.total_hints_embedded,
+    time_spent_seconds,
+    topic_completion_ratio,
+  };
+
+  return validatePayloadShape(payload);
+}
+
+export async function retryPendingSubmission(): Promise<boolean> {
+  if (activePendingReplay) return activePendingReplay;
+
+  activePendingReplay = (async () => {
+    const pendingPayload = readPendingPayload();
+    if (!pendingPayload) return true;
+
+    const token = parseTokenFromStorage();
+    if (!token) return false;
+
+    const result = await postSessionPayload(pendingPayload, token);
+    if (!result.ok) return false;
+
+    clearPendingPayload();
+
+    const currentSessionId = getStoredValue(STORAGE_KEYS.sessionId);
+    if (currentSessionId && currentSessionId === pendingPayload.session_id) {
+      markSubmitted();
+    }
+
+    return true;
+  })().finally(() => {
+    activePendingReplay = null;
+  });
+
+  return activePendingReplay;
+}
+
+export async function submitSession(status: SessionStatus): Promise<SubmitSessionResult> {
+  if (wasSubmitted()) {
+    return { ok: true, status: "already_submitted" };
+  }
+
   if (activeSubmission) return activeSubmission;
 
-  const payload = buildPayload(status);
-  markSubmitted();
-
-  if (status === "exited_midway") {
-    return sendExitBeacon(payload);
-  }
-
-  const token = getStoredValue(STORAGE_KEYS.token);
-  if (!MERGE_API_URL || !token) {
-    if (!MERGE_API_URL) {
-      console.warn("[sessionTracking] VITE_MERGE_API_URL is not configured for submitSession");
+  activeSubmission = (async () => {
+    let payload: SessionPayload;
+    try {
+      payload = buildPayload(status);
+    } catch {
+      return { ok: false, status: "invalid" };
     }
+
+    const token = parseTokenFromStorage();
     if (!token) {
-      console.warn("[sessionTracking] token is missing; cannot set Authorization header");
+      queuePendingPayload(payload);
+      markSubmitted();
+      return { ok: false, status: "queued_pending" };
     }
-    return false;
-  }
 
-  activeSubmission = fetch(MERGE_API_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify(payload),
-    keepalive: true,
-  })
-    .then((res) => res.ok)
-    .catch(() => false)
-    .finally(() => {
-      activeSubmission = null;
-    });
+    const response = await postSessionPayload(payload, token);
+    if (response.ok) {
+      clearPendingPayload();
+      markSubmitted();
+      return {
+        ok: true,
+        status: "submitted",
+        responseData: response.responseData,
+      };
+    }
+
+    queuePendingPayload(payload);
+    markSubmitted();
+    return { ok: false, status: "queued_pending" };
+  })().finally(() => {
+    activeSubmission = null;
+  });
 
   return activeSubmission;
 }
@@ -249,37 +550,35 @@ export function setupExitHandlers(): () => void {
     if (detachExitHandlers) return detachExitHandlers;
     return () => undefined;
   }
-  exitHandlersAttached = true;
-  let cleaned = false;
-  let exiting = false;
 
-  const onExit = () => {
-    if (exiting) return;
-    exiting = true;
+  exitHandlersAttached = true;
+
+  const onBeforeUnload = (event: BeforeUnloadEvent) => {
     if (wasSubmitted()) return;
-    const payload = buildPayload("exited_midway");
-    markSubmitted();
-    sendExitBeacon(payload);
+    event.preventDefault();
+    event.returnValue = "";
   };
 
-  const onVisibilityChange = () => {
-    if (document.visibilityState === "hidden") {
-      onExit();
+  const onUnload = () => {
+    if (wasSubmitted()) return;
+
+    try {
+      const payload = buildPayload("exited_midway");
+      const sent = sendExitBeacon(payload);
+      if (sent) markSubmitted();
+    } catch {
+      // No-op. Do not fabricate ids/session.
     }
   };
 
-  window.addEventListener("beforeunload", onExit);
-  window.addEventListener("pagehide", onExit);
-  document.addEventListener("visibilitychange", onVisibilityChange);
+  window.addEventListener("beforeunload", onBeforeUnload);
+  window.addEventListener("unload", onUnload);
 
   detachExitHandlers = () => {
-    if (cleaned) return;
-    cleaned = true;
     exitHandlersAttached = false;
     detachExitHandlers = null;
-    window.removeEventListener("beforeunload", onExit);
-    window.removeEventListener("pagehide", onExit);
-    document.removeEventListener("visibilitychange", onVisibilityChange);
+    window.removeEventListener("beforeunload", onBeforeUnload);
+    window.removeEventListener("unload", onUnload);
   };
 
   return detachExitHandlers;
@@ -287,16 +586,13 @@ export function setupExitHandlers(): () => void {
 
 export async function confirmReturnToDashboard(): Promise<void> {
   const shouldLeave = window.confirm(
-    "Return to dashboard now? We will attempt to submit your current session before leaving."
+    "Are you sure you want to return to Dashboard? We will submit your session before leaving."
   );
 
   if (!shouldLeave) return;
 
   try {
-    const submitted = await submitSession("exited_midway");
-    if (!submitted) {
-      console.warn("[sessionTracking] Unable to confirm exit submission before redirect");
-    }
+    await submitSession("exited_midway");
   } finally {
     window.location.href = DASHBOARD_URL;
   }

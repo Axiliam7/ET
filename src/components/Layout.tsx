@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { primeTimeChapter } from "../data/primeTimeChapter";
+import { confirmReturnToDashboard } from "../utils/sessionTracking";
 
 export function Layout() {
   const { meta, lessons } = primeTimeChapter;
@@ -48,6 +49,11 @@ export function Layout() {
               </li>
             ))}
           </ul>
+          <div style={{ marginTop: "1rem" }}>
+            <button type="button" className="btn" onClick={() => void confirmReturnToDashboard()}>
+              Return to Dashboard
+            </button>
+          </div>
         </nav>
       </aside>
       <main className="main">
