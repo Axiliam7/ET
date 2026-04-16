@@ -2,12 +2,17 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import progressRoutes from './routes/progress.js';
 import './firebase.js';
 
 dotenv.config();
 
 const app = express();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const distPath = path.resolve(__dirname, '../dist');
 
 app.use(cors({
   origin: ['http://localhost:5173', 'http://localhost:3000'],
@@ -28,9 +33,9 @@ app.get('/health', (req, res) => {
 });
 
 app.use('/api/progress', progressLimiter, progressRoutes);
-
-app.use((req, res) => {
-  res.status(404).json({ error: 'Endpoint not found' });
+app.use(express.static(distPath));
+app.get(/^\/(?!api(?:\/|$)).*/, (req, res) => {
+  res.sendFile(path.join(distPath, 'index.html'));
 });
 
 app.use((err, req, res, next) => {
