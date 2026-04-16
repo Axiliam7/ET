@@ -38,7 +38,7 @@ export type SubmitSessionResult = {
   responseData?: unknown;
 };
 
-const CHAPTER_ID = "grade6_prime_time" as const;
+const CHAPTER_ID = "grade6-prime-time" as const;
 const DASHBOARD_URL = "https://kaushik-dev.online/dashboard";
 const MERGE_API_URL =
   String(import.meta.env.VITE_MERGE_API_URL ?? "").trim() ||
@@ -360,6 +360,7 @@ export async function submitSessionOnce(
   if (!token) return { ok: false };
 
   try {
+    console.log("Sending chapter_id:", CHAPTER_ID);
     const response = await axios.post(MERGE_API_URL, payload, {
       headers: {
         "Content-Type": "application/json",
@@ -394,6 +395,7 @@ function sendExitBeacon(payload: SessionPayload): boolean {
     return false;
   }
 
+  console.log("Sending chapter_id:", CHAPTER_ID);
   const body = new Blob([JSON.stringify(payload)], { type: "application/json" });
   return navigator.sendBeacon(MERGE_API_URL, body);
 }
