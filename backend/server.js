@@ -1,10 +1,9 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import mongoose from 'mongoose';
 import rateLimit from 'express-rate-limit';
 import progressRoutes from './routes/progress.js';
-import { connectDB } from './config/db.js';
+import './firebase.js';
 
 dotenv.config();
 
@@ -23,18 +22,6 @@ const progressLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later.' },
 });
-
-const gracefulShutdown = (signal) => {
-  console.log(`\n${signal} received. Closing server…`);
-  mongoose.connection.close().then(() => process.exit(0)).catch((err) => {
-    console.error('Error closing MongoDB connection:', err.message);
-    process.exit(1);
-  });
-};
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-
-connectDB();
 
 app.get('/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });

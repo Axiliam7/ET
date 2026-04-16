@@ -1,57 +1,58 @@
 import express from 'express';
-import authMiddleware from '../middleware/authMiddleware.js';
-import Progress from '../models/Progress.js';
-import User from '../models/User.js';
+import { admin, db } from '../firebase.js';
 
 const router = express.Router();
+// Restrict saveKey format/length to bound document IDs and avoid unsafe characters.
+const SAVE_KEY_REGEX = /^[a-zA-Z0-9_-]+$/;
+const MAX_SAVE_KEY_LENGTH = 100;
 
-// POST /save: Save or update user progress
-router.post('/save', authMiddleware, async (req, res) => {
-  const userId = req.user.id;
-  const { data } = req.body;
+const isValidSaveKey = (saveKey) =>
+  typeof saveKey === 'string' &&
+  saveKey.length > 0 &&
+  saveKey.length <= MAX_SAVE_KEY_LENGTH &&
+  SAVE_KEY_REGEX.test(saveKey);
+
+// POST /save: Save or update progress by saveKey
+router.post('/save', async (req, res) => {
+  const { saveKey, data } = req.body || {};
+  if (!isValidSaveKey(saveKey)) {
+    return res.status(400).json({ ok: false, error: "Invalid 'saveKey'" });
+  }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return res.status(400).json({ ok: false, error: "Missing or invalid 'data' field" });
+  }
+
   try {
-    const updated = await Progress.findOneAndUpdate(
-      { user: userId },
-      { $set: { 'progress.data': data } },
-      { upsert: true, new: true }
-    );
-    await User.findOneAndUpdate(
-      { _id: userId },
-      { lastUpdated: new Date() },
-      { upsert: true, new: true }
-    );
-    res.status(200).json({ message: 'Progress saved successfully.', progress: updated.progress });
+    await db.collection('progress').doc(saveKey).set({
+      saveKey,
+      data,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    return res.status(200).json({ ok: true, data });
   } catch (error) {
     console.error('Error saving progress:', error.message);
-    res.status(500).json({ message: 'Error saving progress', error: error.message });
+    return res.status(500).json({ ok: false, error: error.message });
   }
 });
 
-// GET /load: Load user progress or create empty record
-router.get('/load', authMiddleware, async (req, res) => {
-  const userId = req.user.id;
+// GET /load: Load progress by saveKey
+router.get('/load', async (req, res) => {
+  const saveKey = req.query.saveKey;
+  if (!isValidSaveKey(saveKey)) {
+    return res.status(400).json({ ok: false, error: "Invalid 'saveKey'" });
+  }
+
   try {
-    const doc = await Progress.findOne({ user: userId });
-    const progress = doc ? doc.progress : { data: {} };
-    res.status(200).json({ progress });
+    const doc = await db.collection('progress').doc(saveKey).get();
+    if (!doc.exists) {
+      return res.status(404).json({ ok: false, error: 'Progress data not found for the provided saveKey' });
+    }
+
+    const progress = doc.data();
+    return res.status(200).json({ ok: true, data: progress.data });
   } catch (error) {
     console.error('Error loading progress:', error.message);
-    res.status(500).json({ message: 'Error loading progress', error: error.message });
-  }
-});
-
-// GET /user: Retrieve user profile info
-router.get('/user', authMiddleware, async (req, res) => {
-  const userId = req.user.id;
-  try {
-    const userProfile = await User.findById(userId);
-    if (!userProfile) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-    res.status(200).json(userProfile);
-  } catch (error) {
-    console.error('Error retrieving user:', error.message);
-    res.status(500).json({ message: 'Error retrieving user', error: error.message });
+    return res.status(500).json({ ok: false, error: error.message });
   }
 });
 
